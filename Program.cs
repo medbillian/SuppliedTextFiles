@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Configuration;
 using System.IO;
 using System.Linq;
@@ -7,6 +7,7 @@ using System.Net;
 using System.Threading;
 using System.Net.Mail;
 using System.Text;
+using System.Collections.Generic;
 
 namespace SuppliedTextFileFTP
 {
@@ -15,13 +16,14 @@ namespace SuppliedTextFileFTP
         static void Main(string[] args)
         {
             string logPath = ConfigurationManager.AppSettings["logPath"];
-            string ftpPath = ConfigurationManager.AppSettings["ftpPath"];
+            string ftpServer = ConfigurationManager.AppSettings["ftpServer"];
             string queuePath = ConfigurationManager.AppSettings["queuePath"];
-            string archivePath = ConfigurationManager.AppSettings["ArchivePath"];
+            string ftpPath = ConfigurationManager.AppSettings["ftpPath"];
             string currentDate = DateTime.Now.ToShortDateString().Replace("/", "");
             string currentTime = DateTime.Now.ToShortTimeString().Replace(":", "").Replace("AM", "").Replace("PM", "").Trim();
             string[] userNames = ConfigurationManager.AppSettings["userNames"].Split(',');
             string[] passwords = ConfigurationManager.AppSettings["passwords"].Split(',');
+            string[] archivePaths = ConfigurationManager.AppSettings["ArchivePaths"].Split('|');
             int numberDays = Int32.Parse(ConfigurationManager.AppSettings["numberDays"]);
             int numberHours = Int32.Parse(ConfigurationManager.AppSettings["numberHours"]);
 
@@ -30,12 +32,13 @@ namespace SuppliedTextFileFTP
                 try
                 {
                     FTP ftpClient = new FTP();
+                    List<string> droppedFiles = new List<string>();
                     streamWriter.WriteLine(DateTime.Now.ToLongTimeString() + ": FTP Supplied Text - Started.");
                     Console.WriteLine(DateTime.Now.ToLongTimeString() + ": FTP Supplied Text - Started.");
 
                     for (int i = 0; i < userNames.Length; i++)
                     {
-                        ftpClient = new FTP(ftpPath, userNames[i], passwords[i]);
+                        ftpClient = new FTP(ftpServer, userNames[i], passwords[i]);
                         streamWriter.WriteLine(DateTime.Now.ToLongTimeString() + ": FTP Supplied Text for " + userNames[i]);
                         Console.WriteLine(DateTime.Now.ToLongTimeString() + ": FTP Supplied Text for " + userNames[i]);
 
@@ -46,58 +49,61 @@ namespace SuppliedTextFileFTP
                         {
                             if ((DateTime.Now - ftpClient.getFileDateTime(file.Trim()).ToUniversalTime()) <= TimeSpan.FromDays(numberDays))
                             {
-                                string fullFTPPath = Path.Combine(ftpPath, file.ToString());
+                                string fullFTPPath = Path.Combine(ftpServer, file.ToString());
                                 string path = queuePath + file.ToString();
 
                                 ftpClient.download(file.ToString(), path);
                                 streamWriter.WriteLine(DateTime.Now.ToLongTimeString() + ": " + fullFTPPath + " copied to " + path);
                                 Console.WriteLine(DateTime.Now.ToLongTimeString() + ": " + fullFTPPath + " copied to " + path);
                             }
+
+                            string[] zipFiles = Directory.GetFiles(queuePath, "*.zip");
+                            for (int j = 0; j < zipFiles.Count(); j++)
+                            {
+                                ZipFile.ExtractToDirectory(zipFiles[j], queuePath);
+                                Console.WriteLine(DateTime.Now.ToShortTimeString() + " Extracting " + zipFiles[j] + " to " + queuePath);
+                                streamWriter.WriteLine(DateTime.Now.ToShortTimeString() + " Extracting " + zipFiles[j] + " to " + queuePath);
+                            }
                         }
 
+                        var txtFiles = Directory.GetFiles(queuePath, "*.txt", SearchOption.AllDirectories).Select(fn => new FileInfo(fn)).OrderByDescending(f => f.Name);
+
+                        foreach (FileInfo fileInfo in txtFiles)
+                        {
+                            string textName = fileInfo.Name;
+                            // Rename Safilo text file
+                            if (fileInfo.Name.Contains("skucat"))
+                            {
+                                textName = "Safilo FW " + DateTime.Now.ToShortDateString().Replace("/", "") + ".txt";
+                            }
+
+                            if (fileInfo.Name.Contains("Marchon") && fileInfo.Name.Contains("Canada"))
+                            {
+                                object waitTimeOut = new object();
+                                lock (waitTimeOut)
+                                {
+                                    // Pause for numberHours before processing Marchon Canada file
+                                    Monitor.Wait(waitTimeOut, TimeSpan.FromMilliseconds(numberHours * 3600 * 1000));
+                                }
+
+                            }
+
+                            File.Copy(fileInfo.FullName, Path.Combine(archivePaths[i] + textName), true);
+                            File.Copy(fileInfo.FullName, Path.Combine(ftpPath + textName), true);
+
+                            Console.WriteLine(DateTime.Now.ToShortTimeString() + " Moving " + textName + " to " + ftpPath);
+                            streamWriter.WriteLine(DateTime.Now.ToShortTimeString() + " Moving " + textName + " to " + ftpPath);
+                            Console.WriteLine(DateTime.Now.ToShortTimeString() + " Archiving " + textName + " to " + archivePaths[i]);
+                            streamWriter.WriteLine(DateTime.Now.ToShortTimeString() + " Archiving " + textName + " to " + archivePaths[i]);
+
+                            // Remove copied files.
+                            droppedFiles.Add(textName);
+                            File.Delete(fileInfo.FullName);
+                        }
                         ftpClient = null;
                     }
-
-                    string[] zipFiles = Directory.GetFiles(queuePath, "*.zip");
-                    for (int i = 0; i < zipFiles.Count(); i++)
-                    {
-                        ZipFile.ExtractToDirectory(zipFiles[i], queuePath);
-                        Console.WriteLine(DateTime.Now.ToShortTimeString() + " Extracting " + zipFiles[i] + " to " + queuePath);
-                        streamWriter.WriteLine(DateTime.Now.ToShortTimeString() + " Extracting " + zipFiles[i] + " to " + queuePath);
-                    }
-
-                    // To make sure that Marchon US is processed before Marchon Canada
-                    var txtFiles = Directory.GetFiles(queuePath, "*.txt", SearchOption.AllDirectories).Select(fn => new FileInfo(fn)).OrderByDescending(f => f.Name);
-
-                    foreach (FileInfo fileInfo in txtFiles)
-                    {
-                        // Rename Safilo text file
-                        if (fileInfo.Name.Contains("skucat"))
-                        {
-                            File.Copy(fileInfo.FullName, Path.Combine(archivePath + ("Safilo FW " + DateTime.Now.ToShortDateString().Replace("/", "") + ".txt")), true);
-                        }
-                        else if (fileInfo.Name.Contains("Marchon") && fileInfo.Name.Contains("Canada"))
-                        {
-                            object waitTimeOut = new object();
-                            lock (waitTimeOut)
-                            {
-                                // Pause for numberHours before processing Marchon Canada file
-                                Monitor.Wait(waitTimeOut, TimeSpan.FromMilliseconds(numberHours * 3600 * 1000));
-                            }
-                            File.Copy(fileInfo.FullName, Path.Combine(archivePath + fileInfo.Name), true);
-                        }
-                        else
-                        {
-                            File.Copy(fileInfo.FullName, Path.Combine(archivePath + fileInfo.Name), true);
-                        }
-
-                        Console.WriteLine(DateTime.Now.ToShortTimeString() + " Moving " + fileInfo.Name + " to " + archivePath);
-                        streamWriter.WriteLine(DateTime.Now.ToShortTimeString() + " Moving " + fileInfo.Name + " to " + archivePath);
-                        // Remove copied files.
-                        File.Delete(fileInfo.FullName);
-                    }
-
-                    SendNotification(txtFiles);
+                  
+                    SendNotification(droppedFiles);
                     Console.WriteLine(DateTime.Now.ToShortTimeString() + " FTP Supplied Text - Email Notification Sent.");
                     streamWriter.WriteLine(DateTime.Now.ToShortTimeString() + " FTP Supplied Text - Email Notification Sent.");
                     Console.WriteLine(DateTime.Now.ToShortTimeString() + " FTP Supplied Text - Ended.");
@@ -113,9 +119,8 @@ namespace SuppliedTextFileFTP
             }
         }
 
-        static void SendNotification(IOrderedEnumerable<FileInfo> txtFiles)
+        static void SendNotification(List<string> txtFiles)
         {
-            string archivePath = ConfigurationManager.AppSettings["ArchivePath"];
             string[] notificationRecipients = ConfigurationManager.AppSettings["notificationRecipients"].Split(',');
             string notificationSender = ConfigurationManager.AppSettings["notificationSender"];
             StringBuilder emailBody = new StringBuilder();
@@ -126,17 +131,12 @@ namespace SuppliedTextFileFTP
                 mailMessage.From = new MailAddress(notificationSender);
                 mailMessage.Subject = "[" + System.Environment.MachineName + "]" + " Supplied Text File(s) Dropped to HF";                 
 
-                emailBody.AppendFormat("The following Supplied Text File(s) were dropped to the hot folder.: <br/>");
+                emailBody.AppendFormat("The following Supplied Text File(s) were dropped to the hot folder: <br/>");
                 emailBody.AppendFormat("<ul>");
-                foreach (FileInfo fileInfo in txtFiles)
+                foreach (string fileName in txtFiles)
                 {
-                    string textFileName = fileInfo.Name;
-                    if (fileInfo.Name.Contains("skucat"))
-                    {
-                        textFileName = "Safilo FW " + DateTime.Now.ToShortDateString().Replace("/", "") + ".txt";
-                    }
                     emailBody.AppendFormat("<li>");
-                    emailBody.AppendFormat(textFileName);
+                    emailBody.AppendFormat(fileName);
                     emailBody.AppendFormat("</li>");
                 }
                 
