@@ -102,10 +102,15 @@ namespace SuppliedTextFileFTP
                         }
                         ftpClient = null;
                     }
-                  
-                    SendNotification(droppedFiles);
-                    Console.WriteLine(DateTime.Now.ToShortTimeString() + " FTP Supplied Text - Email Notification Sent.");
-                    streamWriter.WriteLine(DateTime.Now.ToShortTimeString() + " FTP Supplied Text - Email Notification Sent.");
+
+                    // Send email notification
+                    if (droppedFiles.Count > 0)
+                    {
+                        SendNotification(droppedFiles);
+                        Console.WriteLine(DateTime.Now.ToShortTimeString() + " FTP Supplied Text - Email Notification Sent.");
+                        streamWriter.WriteLine(DateTime.Now.ToShortTimeString() + " FTP Supplied Text - Email Notification Sent.");
+                    }
+
                     Console.WriteLine(DateTime.Now.ToShortTimeString() + " FTP Supplied Text - Ended.");
                     streamWriter.WriteLine(DateTime.Now.ToShortTimeString() + " FTP Supplied Text - Ended.");
                     streamWriter.Close();
